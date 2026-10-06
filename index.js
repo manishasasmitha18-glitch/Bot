@@ -49,6 +49,12 @@ const downloadMediaMessage = async (m, filename) => {
     if (m.type === 'viewOnceMessage') {
         m.type = m.msg.type
     }
+
+    // Guard: media object must have a downloadable source
+    if (!m.msg || (!m.msg.url && !m.msg.directPath)) {
+        throw new Error('No valid media URL or directPath present in message')
+    }
+
     if (m.type === 'imageMessage') {
         var nameJpg = filename ? filename + '.jpg' : 'undefined.jpg'
         const stream = await downloadContentFromMessage(m.msg, 'image')
@@ -86,7 +92,7 @@ const downloadMediaMessage = async (m, filename) => {
         fs.writeFileSync(nameWebp, buffer)
         return fs.readFileSync(nameWebp)
     } else if (m.type === 'documentMessage') {
-        var ext = m.msg.fileName.split('.')[1].toLowerCase().replace('jpeg', 'jpg').replace('png', 'jpg').replace('m4a', 'mp3')
+        var ext = (m.msg.fileName || 'file.bin').split('.').pop().toLowerCase().replace('jpeg', 'jpg').replace('png', 'jpg').replace('m4a', 'mp3')
         var nameDoc = filename ? filename + '.' + ext : 'undefined.' + ext
         const stream = await downloadContentFromMessage(m.msg, 'document')
         let buffer = Buffer.from([])
@@ -321,7 +327,7 @@ const defaultSettings = {
     MAX_RETRIES: 3,
     IMAGE_PATH: 'https://files.catbox.moe/i33owf.png',
     OWNER_NUMBER: '94759934522',
-    WORK_TYPE: 'public',
+    WORK_TYPE: 'onlyme',
     ANTIDELETE: 'true',
     ANTICALL: 'false',
     BOT_NAME: 'ᴍᴀɴᴀᴏꜰᴄ ʟɪᴛᴇ',
@@ -716,7 +722,7 @@ async (manaofc, mek, m, { from, prefix, reply, isOwner, config }) => {
                 title: "🔧 WORK TYPE",
                 rows: [
                     { title: "👥 Public", rowId: prefix + "set worktype public" },
-                    { title: "👤 Only Me (Private)", rowId: prefix + "set worktype private" },
+                    { title: "👤 Only Me (Private)", rowId: prefix + "set worktype onlyme" },
                 ],
             },
             {
@@ -823,8 +829,8 @@ async (manaofc, mek, m, { from, q, reply, isOwner, config }) => {
                 break;
             case 'worktype':
             case 'mode':
-                if (!['public', 'private', 'inbox', 'group', 'onlygroup', 'onlyme'].includes(value.toLowerCase())) {
-                    return reply("❌ *Valid modes:* public, private, inbox, group");
+                if (!['public', 'inbox', 'group', 'onlygroup', 'onlyme'].includes(value.toLowerCase())) {
+                    return reply("❌ *Valid modes:* public, onlyme, inbox, group");
                 }
                 updates.WORK_TYPE = value.toLowerCase();
                 break;
@@ -3218,25 +3224,47 @@ const saveMediaFiles = (manaofc, message, messageId, remoteJid) => {
     const mediaDir = path.join(baseDir, remoteJid, 'media');
     if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
 
+    // Unwrap ephemeral / viewOnce wrappers so we reach the real media object
+    let msgContent = message.message;
+    if (!msgContent) return;
+
+    if (msgContent.ephemeralMessage) msgContent = msgContent.ephemeralMessage.message;
+    if (msgContent.viewOnceMessage) msgContent = msgContent.viewOnceMessage.message;
+    if (msgContent.viewOnceMessageV2) msgContent = msgContent.viewOnceMessageV2.message;
+    if (msgContent.viewOnceMessageV2Extension) msgContent = msgContent.viewOnceMessageV2Extension.message;
+
     const mediaTypes = {
         imageMessage: 'jpg',
         audioMessage: 'mp3',
         videoMessage: 'mp4',
         stickerMessage: 'webp',
+        documentMessage: 'bin',
     };
 
     for (const [type, ext] of Object.entries(mediaTypes)) {
-        if (message.message?.[type]) {
-            const mediaPath = path.join(mediaDir, `${messageId}.${ext}`);
-            // FIX: use downloadMediaMessage (returns a buffer) instead of
-            // downloadAndSaveMediaMessage (returns a filename string)
-            manaofc.downloadMediaMessage(message)
-                .then(mediaBuffer => {
-                    if (Buffer.isBuffer(mediaBuffer)) fs.writeFileSync(mediaPath, mediaBuffer);
-                })
-                .catch(error => console.error(`Error saving ${type}:`, error));
+        const mediaObj = msgContent?.[type];
+        if (!mediaObj) continue;
+
+        // Skip if media has no downloadable source (common cause of the error)
+        if (!mediaObj.url && !mediaObj.directPath) {
+            console.log(`Skipping ${type} – no url/directPath (messageId: ${messageId})`);
             break;
         }
+
+        const mediaPath = path.join(mediaDir, `${messageId}.${ext}`);
+        manaofc.downloadMediaMessage(message)
+            .then(mediaBuffer => {
+                if (Buffer.isBuffer(mediaBuffer) && mediaBuffer.length > 0) {
+                    fs.writeFileSync(mediaPath, mediaBuffer);
+                }
+            })
+            .catch(error => {
+                // Don't spam logs for expected missing-media cases
+                if (!String(error.message || error).includes('No valid media URL')) {
+                    console.error(`Error saving ${type}:`, error.message || error);
+                }
+            });
+        break;
     }
 };
 
@@ -3323,35 +3351,76 @@ async function connectToWA() {
     };
 
     // ---- media helpers ----
-    // FIX: `trueFileName` was assigned without declaration
+    // Helper: extract the actual media payload from a WebMessageInfo / parsed message
+    const extractMediaContent = (message) => {
+        // Already a media payload? (has url or directPath and mimetype)
+        if (message && (message.url || message.directPath) && message.mimetype) {
+            return { content: message, type: (message.mimetype || '').split('/')[0] };
+        }
+
+        let msg = message.message ? message.message : (message.msg ? { [message.type || '']: message.msg } : message);
+        if (!msg || typeof msg !== 'object') return null;
+
+        // Unwrap wrappers
+        if (msg.ephemeralMessage) msg = msg.ephemeralMessage.message;
+        if (msg.viewOnceMessage) msg = msg.viewOnceMessage.message;
+        if (msg.viewOnceMessageV2) msg = msg.viewOnceMessageV2.message;
+        if (msg.viewOnceMessageV2Extension) msg = msg.viewOnceMessageV2Extension.message;
+        if (msg.documentWithCaptionMessage) msg = msg.documentWithCaptionMessage.message;
+
+        const mediaKeys = ['imageMessage', 'videoMessage', 'audioMessage', 'stickerMessage', 'documentMessage'];
+        for (const key of mediaKeys) {
+            if (msg[key]) {
+                const type = key.replace('Message', '');
+                return { content: msg[key], type };
+            }
+        }
+
+        // Fallback: try message.msg / message.mtype style (from sms() helper)
+        if (message.msg && message.type) {
+            const t = String(message.type).replace(/Message$/i, '');
+            if (['image', 'video', 'audio', 'sticker', 'document'].includes(t)) {
+                return { content: message.msg, type: t };
+            }
+        }
+
+        return null;
+    };
+
     manaofc.downloadAndSaveMediaMessage = async (message, filename, attachExtension = true) => {
-        let quoted = message.msg ? message.msg : message;
-        let mime = (message.msg || message).mimetype || "";
-        let messageType = message.mtype
-            ? message.mtype.replace(/Message/gi, "")
-            : mime.split("/")[0];
-        const stream = await downloadContentFromMessage(quoted, messageType);
+        const extracted = extractMediaContent(message);
+        if (!extracted || !extracted.content) {
+            throw new Error('No valid media content found in message');
+        }
+        if (!extracted.content.url && !extracted.content.directPath) {
+            throw new Error('No valid media URL or directPath present in message');
+        }
+
+        const stream = await downloadContentFromMessage(extracted.content, extracted.type);
         let buffer = Buffer.from([]);
         for await (const chunk of stream) {
             buffer = Buffer.concat([buffer, chunk]);
         }
         let type = await FileType.fromBuffer(buffer);
-        let trueFileName = attachExtension ? filename + "." + type.ext : filename;
+        let trueFileName = attachExtension ? filename + "." + (type?.ext || 'bin') : filename;
         await fs.writeFileSync(trueFileName, buffer);
         return trueFileName;
     };
 
     manaofc.downloadMediaMessage = async (message) => {
-        let mime = (message.msg || message).mimetype || "";
-        let messageType = message.mtype
-            ? message.mtype.replace(/Message/gi, "")
-            : mime.split("/")[0];
-        const stream = await downloadContentFromMessage(message, messageType);
+        const extracted = extractMediaContent(message);
+        if (!extracted || !extracted.content) {
+            throw new Error('No valid media content found in message');
+        }
+        if (!extracted.content.url && !extracted.content.directPath) {
+            throw new Error('No valid media URL or directPath present in message');
+        }
+
+        const stream = await downloadContentFromMessage(extracted.content, extracted.type);
         let buffer = Buffer.from([]);
         for await (const chunk of stream) {
             buffer = Buffer.concat([buffer, chunk]);
         }
-
         return buffer;
     };
 
