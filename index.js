@@ -324,8 +324,8 @@ const defaultSettings = {
     WORK_TYPE: 'public',
     ANTIDELETE: 'true',
     ANTICALL: 'false',
-    BOT_NAME: 'MANISHA-MD',
-    FOOTER: '> _*Powered By Manaofc*_',
+    BOT_NAME: 'ᴍᴀɴᴀᴏꜰᴄ ʟɪᴛᴇ',
+    FOOTER: '> *𝐏𝐨𝐰𝐞𝐫𝐝 𝐁𝐲 𝐌𝐚𝐧𝐚𝐨𝐟𝐜 ☻*',
     ANTICALL_MSG: '📵 Calls are not allowed! Please send a message instead.',
     NON_BUTTON: false,
     ANTI_LINK: 'false',
@@ -2403,6 +2403,28 @@ cmd(
 
             const data = res.data;
 
+            // Filter only DLServer-01 and DLServer-02
+            const dlServers = data.links.filter(link => 
+                link.server === "DLServer-01" || link.server === "DLServer-02"
+            );
+
+            // Get unique qualities (1080p, 720p, 480p) - prioritize DLServer-01
+            const qualities = ["1080p", "720p", "480p"];
+            const uniqueLinks = [];
+
+            qualities.forEach(quality => {
+                // Try DLServer-01 first, then DLServer-02
+                const link = dlServers.find(l => l.quality === quality && l.server === "DLServer-01") ||
+                             dlServers.find(l => l.quality === quality && l.server === "DLServer-02");
+                if (link) {
+                    uniqueLinks.push(link);
+                }
+            });
+
+            if (uniqueLinks.length === 0) {
+                return reply("❌ *No DLServer links available for this movie!*");
+            }
+
             const caption = `*╭━━━━━━━✧༺♥༻✧━━━━━━━*\n*🎬 ${data.title}*\n\n` +
                 `*📅 Year:* ${data.year || "N/A"}\n` +
                 `*⏱️ Duration:* ${data.duration || "N/A"}\n` +
@@ -2412,11 +2434,12 @@ cmd(
                 `*🎬 Directors:* ${(Array.isArray(data.directors) ? data.directors.join(", ") : data.directors) || "N/A"}\n` +
                 `*🌟 Stars:* ${(Array.isArray(data.stars) ? data.stars.join(", ") : data.stars) || "N/A"}\n` +
                 `*🎞️ Genres:* ${(Array.isArray(data.genres) ? data.genres.join(", ") : data.genres) || "N/A"}\n` +
+                `*📡 Server:* DLServer (Direct)\n` +
                 `*╰━━━━━━━✧༺♥༻✧━━━━━━━*`;
 
-            const buttons = data.links.map((dl) => ({
+            const buttons = uniqueLinks.map((dl) => ({
                 buttonId: prefix + "ssdown " + dl.pageLink,
-                buttonText: { displayText: dl.quality + " (" + dl.size + ")" },
+                buttonText: { displayText: `📥 ${dl.quality} (${dl.size})` },
                 type: 1
             }));
 
@@ -2467,14 +2490,28 @@ cmd(
             }
 
             const data = res.data;
-            const downloadUrl = data.directUrl || data.pixeldrainUrl;
+            
+            // Use directUrl only (pixeldrainUrl doesn't exist in API)
+            const downloadUrl = data.directUrl || data.downloadUrl;
+            
+            if (!downloadUrl) {
+                return reply("❌ *No download URL found!*");
+            }
+
+            // Clean filename (remove special characters)
+            let fileName = data.title || "movie";
+            fileName = fileName.replace(/[|\/\\:*?"<>]/g, "").trim();
+            if (fileName.length > 100) {
+                fileName = fileName.substring(0, 100);
+            }
+            fileName += ".mp4";
 
             await manaofc.sendMessage(
                 from,
                 {
                     document: { url: downloadUrl },
                     mimetype: "video/mp4",
-                    fileName: data.title + ".mp4",
+                    fileName: fileName,
                 },
                 { quoted: mek }
             );
@@ -2489,178 +2526,11 @@ cmd(
         }
     }
 );
+
 
 // ============================================
 // CINESUBZ SEARCH 
 // ============================================
-cmd(
-    {
-        pattern: "cinesubz",
-        react: "🎬",
-        alias: ["cs", "movie"],
-        category: "movie",
-        use: ".cinesubz <movie name>",
-        filename: __filename,
-    },
-    async (manaofc, mek, m, { from, prefix, q, reply, config }) => {
-        try {
-            if (!q) return reply("❌ *Please provide a movie name!*\n\n*Example:* .cinesubz deadpool");
-
-            await manaofc.sendMessage(from, {
-                react: { text: "🔍", key: mek.key },
-            });
-
-            const api = await fetch("https://api-dark-shan-yt.koyeb.app/movie/cinesubz-search?q=" + encodeURIComponent(q) + "&apikey=afb95c4d7db5cd8a");
-
-            const res = await api.json();
-
-            if (!res.status || !res.data || res.data.length === 0) {
-                return reply("❌ *No movies found for your search!*");
-            }
-
-            const rows = res.data.slice(0, 10).map((v) => ({
-                buttonId: prefix + "cinfo " + v.link,
-                buttonText: {
-                    displayText: v.title.length > 40 ? v.title.slice(0, 37) + "..." : v.title
-                },
-                type: 1
-            }));
-
-            const buttonMessage = {
-                image: "https://files.catbox.moe/57a24d.jpeg",
-                caption: `*🎬 ${config.BOT_NAME} CINESUBZ SEARCH* `,
-                footer: config.FOOTER,
-                buttons: rows,
-                headerType: 4
-            };
-
-            await manaofc.buttonMessage(from, buttonMessage, mek);
-
-            await manaofc.sendMessage(from, {
-                react: { text: "✅", key: mek.key },
-            });
-
-        } catch (e) {
-            console.log(e);
-            reply("❌ *An error occurred while searching!*");
-        }
-    }
-);
-
-// ============================================
-// CINESUBZ INFO 
-// ============================================
-cmd(
-    {
-        pattern: "cinfo",
-        react: "📋",
-        dontAddCommandList: true,
-        filename: __filename,
-    },
-    async (manaofc, mek, m, { from, prefix, q, reply, config }) => {
-        try {
-            if (!q) return reply("❌ *Need a movie link!*");
-
-            await manaofc.sendMessage(from, {
-                react: { text: "⏳", key: mek.key },
-            });
-
-            const api = await fetch("https://api-dark-shan-yt.koyeb.app/movie/cinesubz-info?url=" + encodeURIComponent(q) + "&apikey=afb95c4d7db5cd8a");
-
-            const res = await api.json();
-
-            if (!res.status || !res.data) {
-                return reply("❌ *Failed to get movie info!*");
-            }
-
-            const data = res.data;
-
-            const caption = `*╭━━━━━━━✧༺♥༻✧━━━━━━━*\n*🎬 ${data.title}*\n\n` +
-                `*📅 Year:* ${data.year || "N/A"}\n` +
-                `*⏱️ Duration:* ${data.duration || "N/A"}\n` +
-                `*⭐ Rating:* ${data.rating || "N/A"}\n` +
-                `*🎞️ Quality:* ${data.quality || "N/A"}\n` +
-                `*🗣️ Language:* ${data.tag || "N/A"}\n` +
-                `*🌍 Country:* ${data.country || "N/A"}\n` +
-                `*🎬 Directors:* ${(data.directors || "N/A").replace("Director:", "")}\n` +
-                `*🌟 Stars:* ${data.stars || "N/A"}\n` +
-                `*╰━━━━━━━✧༺♥༻✧━━━━━━━*`;
-
-            const buttons = data.downloads.map((dl) => ({
-                buttonId: prefix + "cdown " + dl.link,
-                buttonText: { displayText: dl.quality + " (" + dl.size + ")" },
-                type: 1
-            }));
-
-            const buttonMessage = {
-                image: { url: data.image },
-                caption: caption,
-                footer: config.FOOTER,
-                buttons: buttons,
-                headerType: 4
-            };
-
-            await manaofc.buttonMessage(from, buttonMessage, mek);
-
-            await manaofc.sendMessage(from, {
-                react: { text: "✅", key: mek.key },
-            });
-
-        } catch (e) {
-            console.log(e);
-            reply("❌ *Failed to get movie info!*");
-        }
-    }
-);
-
-// ============================================
-// CINESUBZ DOWNLOAD 
-// ============================================
-cmd(
-    {
-        pattern: "cdown",
-        react: "📁",
-        dontAddCommandList: true,
-        filename: __filename,
-    },
-    async (manaofc, mek, m, { from, q, reply, config }) => {
-        try {
-            if (!q) return reply("❌ *Need a download link!*");
-
-            await manaofc.sendMessage(from, {
-                react: { text: "⬇️", key: mek.key },
-            });
-
-            const api = await fetch("https://api-dark-shan-yt.koyeb.app/movie/cinesubz-download?url=" + encodeURIComponent(q) + "&apikey=afb95c4d7db5cd8a");
-            const res = await api.json();
-
-            if (!res.status || !res.data || !res.data.download || res.data.download.length === 0) {
-                return reply("❌ *Failed to get download link!*");
-            }
-
-            const data = res.data;
-            const downloadUrl = data.download[0].url;
-
-            await manaofc.sendMessage(
-                from,
-                {
-                    document: { url: downloadUrl },
-                    mimetype: "video/mp4",
-                    fileName: data.title,
-                },
-                { quoted: mek }
-            );
-
-            await manaofc.sendMessage(from, {
-                react: { text: "✅", key: mek.key },
-            });
-
-        } catch (e) {
-            console.log(e);
-            reply("❌ *Download failed!*");
-        }
-    }
-);
 
 // ============================================
 // SINHALACARTOONS SEARCH
@@ -3185,104 +3055,6 @@ async (manaofc, mek, m, { from, isOwner, reply, q, config }) => {
 //====== AI COMMANDS ================
 //===================================
 
-// ========== GROQ AI ==========
-cmd({
-    pattern: "groq",
-    react: '🤖',
-    alias: ["groqai"],
-    desc: "Chat with Groq AI",
-    category: "ai",
-    use: '.groq <question>',
-    filename: __filename
-}, async (manaofc, mek, m, { from, q, reply, config }) => {
-    try {
-        if (!q) return await reply("❓ *Please ask me something!*\n\nExample: `.groq hi`");
-
-        await manaofc.sendMessage(from, { react: { text: "⏳", key: mek.key } });
-
-        const res = await fetch('https://manaofc-api.vercel.app/ai/groq?q=' + encodeURIComponent(q));
-        const result = await res.json();
-
-        if (!result.success || !result.message) {
-            return await reply("❌ *Failed to get response from Groq AI.*");
-        }
-
-        const text = `🤖 *Groq AI* (${result.model})\n\n${result.message}\n\n${config.FOOTER || ''}`;
-
-        await manaofc.sendMessage(from, { text }, { quoted: mek });
-        await manaofc.sendMessage(from, { react: { text: "✅", key: mek.key } });
-
-    } catch (e) {
-        await reply("❌ *Error:* " + e.message);
-        console.log(e);
-    }
-});
-
-// ========== SAMBANOVA AI ==========
-cmd({
-    pattern: "sambanova",
-    react: '⚡',
-    alias: ["samba", "snova"],
-    desc: "Chat with Sambanova AI",
-    category: "ai",
-    use: '.sambanova <question>',
-    filename: __filename
-}, async (manaofc, mek, m, { from, q, reply, config }) => {
-    try {
-        if (!q) return await reply("❓ *Please ask me something!*\n\nExample: `.sambanova hi`");
-
-        await manaofc.sendMessage(from, { react: { text: "⏳", key: mek.key } });
-
-        const res = await fetch('https://manaofc-api.vercel.app/ai/sambanova?q=' + encodeURIComponent(q));
-        const result = await res.json();
-
-        if (!result.success || !result.message) {
-            return await reply("❌ *Failed to get response from Sambanova AI.*");
-        }
-
-        const text = `⚡ *Sambanova AI* (${result.model})\n\n${result.message}\n\n${config.FOOTER || ''}`;
-
-        await manaofc.sendMessage(from, { text }, { quoted: mek });
-        await manaofc.sendMessage(from, { react: { text: "✅", key: mek.key } });
-
-    } catch (e) {
-        await reply("❌ *Error:* " + e.message);
-        console.log(e);
-    }
-});
-
-// ========== MISTRAL AI ==========
-cmd({
-    pattern: "mistral",
-    react: '🌊',
-    alias: ["mistralai"],
-    desc: "Chat with Mistral AI",
-    category: "ai",
-    use: '.mistral <question>',
-    filename: __filename
-}, async (manaofc, mek, m, { from, q, reply, config }) => {
-    try {
-        if (!q) return await reply("❓ *Please ask me something!*\n\nExample: `.mistral hi`");
-
-        await manaofc.sendMessage(from, { react: { text: "⏳", key: mek.key } });
-
-        const res = await fetch('https://manaofc-api.vercel.app/ai/mistral?q=' + encodeURIComponent(q));
-        const result = await res.json();
-
-        if (!result.success || !result.message) {
-            return await reply("❌ *Failed to get response from Mistral AI.*");
-        }
-
-        const text = `🌊 *Mistral AI* (${result.model})\n\n${result.message}\n\n${config.FOOTER || ''}`;
-
-        await manaofc.sendMessage(from, { text }, { quoted: mek });
-        await manaofc.sendMessage(from, { react: { text: "✅", key: mek.key } });
-
-    } catch (e) {
-        await reply("❌ *Error:* " + e.message);
-        console.log(e);
-    }
-});
 
 //=====================================
 // ========== SEARCH COMMAND ==========
